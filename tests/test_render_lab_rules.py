@@ -170,6 +170,65 @@ class MagnifierFallbackTest(unittest.TestCase):
         self.assertEqual(lost, 0)
 
 
+@unittest.skipIf(np is None, "numpy and Pillow are the render lab's")
+class LettersTableOcrArtifactTest(unittest.TestCase):
+    """letters/table stays amber by measurement, not by a loosened budget
+    (#904). Its pixels match LibreOffice's; Tesseract misreads the top-left
+    cell ("R1C1" as "rici", unhinted 12px glyphs), so 8 of 9 cell words
+    match. This pins that artifact: the magnifier rescues the two cells it
+    can read identically on both sides, not the misread one, and the green
+    word budget stays at 0.90, so 8/9 stays amber instead of being "fixed"
+    by dropping the budget or over-rescuing."""
+
+    def setUp(self):
+        import compare
+
+        self.compare = compare
+
+    def cell(self, label, i):
+        r, c = divmod(i, 3)
+        # (text, x, y, line, box, printed) — box left = i*10 recovers the cell.
+        return (label, 20 + c * 25, 20 + r * 25, (1, 1, 1), (i * 10, i * 10, 10, 10), True)
+
+    def test_the_misread_cell_is_not_matched_and_stays_amber(self):
+        labels = ["r1c1", "r1c2", "r1c3", "r2c1", "r2c2", "r2c3", "r3c1", "r3c2", "r3c3"]
+        ref = [self.cell(labels[i], i) for i in range(9)]
+        # Our page-wide read misreads the whole first row; R1C1 most badly, as
+        # the roadmap records ("R1C1" as "rici", unhinted 12px glyphs).
+        ours_rw = ["rici", "rxc2", "r1cx", "r2c1", "r2c2", "r2c3", "r3c1", "r3c2", "r3c3"]
+        ours = [self.cell(ours_rw[i], i) for i in range(9)]
+
+        # Without the magnifier the three misread cells are lost: 6 of 9.
+        words, _, _ = self.compare.match_words(ref, ours, reread=None)
+        self.assertAlmostEqual(words, 6 / 9)
+
+        # The magnifier rescues the two cells that read the same on both sides
+        # (r1c2, r1c3) but not the misread r1c1, exactly as the roadmap
+        # documents. The crop's box left (i*10) says which cell it looked at.
+        RESCUE = {1: "r1c2", 2: "r1c3"}
+
+        def reread(box):
+            i = box[0] // 10
+            return RESCUE.get(i)
+
+        words, _, _ = self.compare.match_words(ref, ours, reread=reread)
+        self.assertAlmostEqual(words, 8 / 9)
+
+        # 8 of 9 is below the green word budget, so the fixture is amber, not
+        # green. The pixels agree; only the measurement disagrees.
+        self.assertLess(words, self.compare.GREEN_WORDS)
+        m = {"ink": 1.02, "ssim": 1.0, "words": words, "lost_lines": 0,
+             "disp_pt": 0.3, "colors": 1.0, "ref_words": 9}
+        self.assertEqual(self.compare.verdict(m), "amber")
+
+    def test_the_green_word_budget_is_not_loosened_to_green_it(self):
+        # The point of pinning the artifact: 8/9 (0.889) must stay below the
+        # green word budget, so a loosening to 0.85 would wrongly green the
+        # fixture and stop the misread from being measured. The budget is
+        # unchanged.
+        self.assertEqual(self.compare.GREEN_WORDS, 0.90)
+        self.assertGreater(self.compare.GREEN_WORDS, 8 / 9)
+
 
 @unittest.skipIf(np is None, "numpy and Pillow are the render lab's")
 class OpeningSheetPageTest(unittest.TestCase):
