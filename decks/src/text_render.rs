@@ -100,10 +100,12 @@ fn place_inner(
     let marks = markers(&styles, &empty);
 
     // The recomputed fit draws every size smaller; a plain box draws at
-    // full size with default line spacing.
+    // full size. line_spacing stays 1.0 (not 0.0) so a wrapped paragraph
+    // stacks at the font's full line pitch rather than the tight
+    // ascent+descent that line_spacing 0.0 would give.
     let (font_k, line_factor) = match fit {
         Some(a) => (a.font_scale, (1.0 - a.line_reduction) as f32),
-        None => (1.0, 0.0),
+        None => (1.0, 1.0),
     };
     let text_scale = scale * font_k;
     let mut desc = desc.clone();
@@ -510,5 +512,23 @@ mod tests {
         let full = place(&ctx(), "4\n5\n6", &[Run { text: "4\n5\n6".into(), style: small }], &body, (0.0, 0.0, 300.0, 300.0), 1.0, &big);
         assert_eq!(blank.len(), 3);
         assert!((blank[2].y - full[2].y).abs() < 1e-9, "blank {} vs text {}", blank[2].y, full[2].y);
+    }
+
+    /// #1386: a plain (fit=None) wrapped paragraph stacks at the font's full
+    /// line pitch, not the tight ascent+descent that line_spacing 0.0 gave.
+    #[test]
+    fn a_plain_wrapped_paragraph_stacks_at_full_line_pitch() {
+        let body = TextBody {
+            insets: Some(Insets { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 }),
+            ..Default::default()
+        };
+        let rect = (0.0, 0.0, 300.0, 300.0);
+        let wrapped = place(&ctx(), "aa\nbb\ncc", &runs("aa\nbb\ncc"), &body, rect, 1.0, &desc());
+        let single = place(&ctx(), "aa", &runs("aa"), &body, rect, 1.0, &desc());
+        let wrapped_h = wrapped[0].layout.pixel_size().1 as f64;
+        let single_h = single[0].layout.pixel_size().1 as f64;
+        // Three lines at full line pitch are far taller than one line's own
+        // height: line_spacing 0.0 stacks them back to ~a single line.
+        assert!(wrapped_h > 2.0 * single_h, "wrapped {} vs single {}", wrapped_h, single_h);
     }
 }
